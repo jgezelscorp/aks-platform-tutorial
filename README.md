@@ -45,3 +45,5 @@ All are **variables, not secrets** — OIDC means no client secret is ever store
 | `ADMIN_GROUP_OBJECT_ID` | Entra group granted cluster-admin (used by `infra.yml`) |
 
 See `ERRATA.md` for the full list of corrections applied to the original tutorial.
+
+<!-- CI validation trigger -->

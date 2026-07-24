@@ -1,0 +1,98 @@
+# Section 11 — Kyverno guardrails (CORRECTED from deck).
+# Deck bug: the deck showed rule fragments after '---' with no ClusterPolicy
+# wrapper (invalid YAML), and a cluster-wide Enforce registry rule that would
+# block the platform's own mcr.microsoft.com images. Here each policy is a
+# valid, self-contained ClusterPolicy in AUDIT mode (the deck's own advice:
+# "start every new policy in Audit"). System namespaces are excluded.
+#
+# ${ACR} is substituted by envsubst at apply time.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-labels
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: check-labels
+    match:
+      any:
+      - resources:
+          kinds: [Deployment]
+    validate:
+      message: "labels app.kubernetes.io/name and team are required"
+      pattern:
+        metadata:
+          labels:
+            app.kubernetes.io/name: "?*"
+            team: "?*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: no-privileged
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+    validate:
+      message: "privileged containers are not allowed"
+      pattern:
+        spec:
+          =(securityContext):
+            =(privileged): "false"
+          containers:
+          - =(securityContext):
+              =(privileged): "false"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-registry
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: allowed-registry
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+    exclude:
+      any:
+      - resources:
+          namespaces: [kube-system, kube-node-lease, kube-public, kyverno, gatekeeper-system, azure-alb-system]
+    validate:
+      message: "images must come from ${ACR}.azurecr.io"
+      pattern:
+        spec:
+          containers:
+          - image: "${ACR}.azurecr.io/*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-limits
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: default-limits
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+    mutate:
+      patchStrategicMerge:
+        spec:
+          containers:
+          - (name): "*"
+            resources:
+              limits:
+                +(memory): "512Mi"
+                +(cpu): "500m"

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: demo-sa
+  namespace: demo
+  annotations:
+    azure.workload.identity/client-id: "${DEMO_CLIENT}"
+  labels:
+    azure.workload.identity/use: "true"

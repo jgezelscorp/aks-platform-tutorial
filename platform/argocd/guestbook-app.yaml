@@ -1,0 +1,24 @@
+# Section 12 — VALIDATED Argo CD demo Application.
+# Points at Argo's public example repo so the sync -> Healthy loop can be proven
+# WITHOUT needing your private repo/creds. For the real platform, change repoURL
+# to your fork (see app-of-apps.yaml) and path to apps/demo.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    path: guestbook
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: guestbook
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true

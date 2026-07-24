@@ -1,0 +1,24 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: demo-scaler
+  namespace: demo
+spec:
+  scaleTargetRef:
+    name: demo                # the demo Deployment
+  minReplicaCount: 1
+  maxReplicaCount: 4
+  cooldownPeriod: 60
+  pollingInterval: 15
+  triggers:
+    # Self-contained proof: a cron trigger raises the desired replica
+    # floor on a schedule with NO external metrics source required.
+    # (The deck's example uses a Prometheus trigger against managed
+    # Prometheus; that needs in-cluster query auth. Cron proves KEDA
+    # creates a managed HPA and drives replicas deterministically.)
+    - type: cron
+      metadata:
+        timezone: Etc/UTC
+        start: "0,10,20,30,40,50 * * * *"   # every 10 min
+        end: "5,15,25,35,45,55 * * * *"      # 5-min active window
+        desiredReplicas: "3"

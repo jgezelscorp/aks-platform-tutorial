@@ -1,0 +1,11 @@
+# ApplicationLoadBalancer CR — the ALB Controller reconciles this into an Azure
+# Application Gateway for Containers (AGC). $ALB_SUBNET_ID is rendered by envsubst
+# (06-agc.sh) to the resource id of the delegated snet-alb subnet.
+apiVersion: alb.networking.azure.io/v1
+kind: ApplicationLoadBalancer
+metadata:
+  name: alb-platform
+  namespace: alb-infra
+spec:
+  associations:
+  - ${ALB_SUBNET_ID}

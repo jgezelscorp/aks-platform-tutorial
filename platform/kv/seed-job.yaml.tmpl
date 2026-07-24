@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kv-seed-secret
+  namespace: demo
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: demo-sa
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: mcr.microsoft.com/azure-cli:latest
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -e
+              echo "Logging in with workload identity ($AZURE_CLIENT_ID)..."
+              az login --service-principal \
+                -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" \
+                --federated-token "$(cat "$AZURE_FEDERATED_TOKEN_FILE")" >/dev/null
+              echo "Setting secret '${SECRET_NAME}' in ${KV_NAME} (via private endpoint)..."
+              az keyvault secret set --vault-name "${KV_NAME}" \
+                --name "${SECRET_NAME}" --value "${SECRET_VALUE}" -o none
+              echo "SEED_DONE: $(az keyvault secret show --vault-name "${KV_NAME}" --name "${SECRET_NAME}" --query id -o tsv)"

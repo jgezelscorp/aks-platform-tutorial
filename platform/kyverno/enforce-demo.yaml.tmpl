@@ -1,0 +1,26 @@
+# Section 11 — Kyverno ENFORCE demonstration (non-destructive).
+# Scoped to the throwaway namespace kyverno-test ONLY, so it can hard-block
+# without endangering the validated platform. Proves validate:Enforce blocks
+# a non-compliant image at admission time.
+#
+# ${ACR} is substituted by envsubst at apply time.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kyverno-test-enforce-registry
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+  - name: registry-only-acr
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+          namespaces: [kyverno-test]
+    validate:
+      message: "images must come from ${ACR}.azurecr.io"
+      pattern:
+        spec:
+          containers:
+          - image: "${ACR}.azurecr.io/*"

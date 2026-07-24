@@ -1,0 +1,21 @@
+# Allow ingress to the demo app ONLY from the AGC data-plane subnet.
+# NOTE (deck fix): port is 80 — the demo app (aks-helloworld:v1) listens on
+# container port 80. The deck said 8080, which would block real AGC traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-agc
+  namespace: demo
+spec:
+  podSelector:
+    matchLabels:
+      app: demo
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: 10.0.4.0/24        # AGC subnet (snet-alb)
+    ports:
+    - protocol: TCP
+      port: 80

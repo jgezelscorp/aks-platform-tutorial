@@ -1,0 +1,31 @@
+name: deploy
+on:
+  workflow_run:
+    workflows: [ build ]
+    types: [ completed ]
+permissions:
+  contents: write   # commits the new image tag
+env:
+  ACR: ${{ vars.ACR_NAME }}
+jobs:
+  promote:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: azure/setup-kubectl@v4
+      - name: Install kustomize
+        run: |
+          curl -sfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
+          sudo mv kustomize /usr/local/bin/
+      - name: Bump image tag Argo CD watches
+        run: |
+          cd apps/demo
+          kustomize edit set image demo="${ACR}.azurecr.io/demo:${{ github.event.workflow_run.head_sha }}"
+          git config user.name  ci-bot
+          git config user.email ci-bot@users.noreply.github.com
+          git commit -am "deploy demo ${{ github.event.workflow_run.head_sha }}" || echo "no changes"
+          git push
+      # Argo CD auto-syncs the new tag -> cluster (Section 12).

@@ -1,0 +1,25 @@
+# Gateway = a public HTTPS listener on the AGC. Platform team owns this; app teams
+# attach HTTPRoutes to it. TLS terminates here using the demo-tls Secret (06-agc.sh
+# generates a self-signed cert for validation — replace with a real/Key Vault cert in prod).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gw-platform
+  namespace: demo
+  annotations:
+    alb.networking.azure.io/alb-namespace: alb-infra
+    alb.networking.azure.io/alb-name: alb-platform
+spec:
+  gatewayClassName: azure-alb-external
+  listeners:
+  - name: https
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: demo-tls
+    allowedRoutes:
+      namespaces:
+        from: Same

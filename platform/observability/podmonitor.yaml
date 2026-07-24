@@ -1,0 +1,18 @@
+# Section 13 — VALIDATED PodMonitor.
+# Deck used port 8080; our container's named port is 'http' (80). More importantly
+# the validation image (aks-helloworld) exposes NO Prometheus /metrics endpoint, so
+# this PodMonitor will simply find no targets until you run an app that serves
+# /metrics on a named port. Kept here as the correct SHAPE for a real metrics app.
+apiVersion: azmonitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: demo-podmonitor
+  namespace: demo
+spec:
+  selector:
+    matchLabels:
+      app: demo
+  podMetricsEndpoints:
+  - port: http            # a real metrics app should name its metrics port here
+    path: /metrics
+    interval: 30s

@@ -1,0 +1,25 @@
+# Squad: ignore runtime state (logs, inbox, sessions)
+# Note: .squad/casting/* is identity and MUST be committed to main, not ignored
+.squad/orchestration-log/
+.squad/log/
+.squad/decisions/inbox/
+.squad/sessions/
+.squad/.scratch/
+.squad/.cache/
+# Squad: SubSquad activation file (local to this machine)
+.squad-workstream
+
+# --- AKS tutorial repo ---
+# .exec harness holds sandbox.env (sub-scoped overrides) + diagnostic scratch — never publish
+.exec/
+# Deck source extract + any PPTX/binary artifacts
+deck.md
+*.pptx
+# Squad internal team state — not part of the customer tutorial
+.squad/
+# Logs and local terraform state
+*.log
+.terraform/
+*.tfstate
+*.tfstate.*
+.DS_Store

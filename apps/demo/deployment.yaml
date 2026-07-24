@@ -1,0 +1,47 @@
+# Demo deployment. For deck validation we use the public aks-helloworld image
+# (serves HTTP on :80) instead of the deck's private <ACR>.azurecr.io/demo:1.0 so the
+# platform (WI + KV CSI + AGC ingress) can be proven without first pushing a custom image.
+# The WI opt-in label + serviceAccountName wire identity; the CSI volume mounts the KV secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo
+  namespace: demo
+  labels:
+    app: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo
+  template:
+    metadata:
+      labels:
+        app: demo
+        azure.workload.identity/use: "true"   # WI opt-in
+    spec:
+      serviceAccountName: demo-sa
+      containers:
+      - name: app
+        image: mcr.microsoft.com/azuredocs/aks-helloworld:v1
+        ports:
+        - { name: http, containerPort: 80 }
+        env:
+        - name: SECRET_PATH
+          value: /mnt/secrets/demo-secret
+        volumeMounts:
+        - { name: kv, mountPath: /mnt/secrets, readOnly: true }
+        readinessProbe:
+          httpGet: { path: /, port: 80 }
+        livenessProbe:
+          httpGet: { path: /, port: 80 }
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits:   { cpu: 250m, memory: 256Mi }
+      volumes:
+      - name: kv
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: demo-kv

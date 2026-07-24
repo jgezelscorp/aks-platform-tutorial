@@ -1,0 +1,42 @@
+name: build
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'apps/**' ]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+env:
+  ACR: ${{ vars.ACR_NAME }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Mirror a pinned public image into ACR via ACR Tasks (no Docker engine needed).
+      # OIDC login above authorises the push — no registry secret stored.
+      - name: Import image to ACR
+        run: |
+          az acr import --name "$ACR" --force \
+            --image demo:${{ github.sha }} \
+            --source mcr.microsoft.com/azuredocs/aks-helloworld:v1
+
+      - name: ACR docker login (for scanner pull)
+        run: az acr login --name "$ACR"
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ vars.ACR_NAME }}.azurecr.io/demo:${{ github.sha }}
+          # Tutorial demo reports findings without failing the run. In production
+          # set exit-code: '1' to fail the build on CRITICAL/HIGH CVEs.
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'

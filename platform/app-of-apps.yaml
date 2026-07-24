@@ -1,0 +1,29 @@
+# Section 12 — App-of-apps ROOT Application (template for YOUR platform repo).
+# One root Application whose job is to create the child Applications that install
+# each platform component (kyverno, ingress, observability) and the demo app.
+# Bootstrapping the whole platform then becomes: kubectl apply this ONE file.
+#
+# Replace \/\ with your fork before applying. The repo must
+# contain the platform/ and apps/ tree from this tutorial. Argo needs read access
+# (public repo, or add creds via 'argocd repo add').
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/\/    path: platform
+    targetRevision: main
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true

@@ -1,0 +1,29 @@
+name: infra
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'infra/**' ]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  id-token: write
+# NOTE: targets the 'prod' Environment, which requires a reviewer approval before
+# the apply job runs. It is intentionally NOT auto-triggered for the tutorial demo
+# (would provision a full second cluster). Approve a workflow_dispatch run to apply.
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=infra/terraform init
+      - run: |
+          terraform -chdir=infra/terraform apply -auto-approve \
+            -var=admin_group_object_id=${{ vars.ADMIN_GROUP_OBJECT_ID }} \
+            -var=subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}

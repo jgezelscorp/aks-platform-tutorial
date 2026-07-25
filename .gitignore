@@ -15,6 +15,10 @@
 # Deck source extract + any PPTX/binary artifacts
 deck.md
 *.pptx
+# Word tutorial contains real subscription/tenant/group IDs — keep private, never publish
+*.docx
+# Private env overrides (real Entra group object IDs / secrets) — keep the .example, ignore the real file
+env.local.sh
 # Squad internal team state — not part of the customer tutorial
 .squad/
 # Logs and local terraform state

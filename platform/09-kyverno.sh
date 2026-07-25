@@ -8,10 +8,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source ./env.sh
 
-echo "### 1. Install Kyverno (Helm)"
+echo "### 1. Install Kyverno (Helm) — pinned to the system pool"
 helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
 helm repo update kyverno >/dev/null
-helm upgrade --install kyverno kyverno/kyverno -n kyverno --create-namespace --wait --timeout 5m
+helm upgrade --install kyverno kyverno/kyverno -n kyverno --create-namespace \
+  -f platform/kyverno/pin-values.yaml --wait --timeout 5m
 echo "    Kyverno pods:"
 kubectl -n kyverno get pods --no-headers | awk '{print "      "$1"  "$3}'
 echo "    Kyverno version: $(kubectl -n kyverno get deploy kyverno-admission-controller -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's#.*:##')"

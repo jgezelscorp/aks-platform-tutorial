@@ -5,6 +5,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../env.sh"
+source "$HERE/lib/pin.sh"
 
 echo "== [1/4] Enable managed KEDA add-on =="
 if az aks show -g "$RG" -n "$AKS" --query 'workloadAutoScalerProfile.keda.enabled' -o tsv 2>/dev/null | grep -qi true; then
@@ -12,6 +13,12 @@ if az aks show -g "$RG" -n "$AKS" --query 'workloadAutoScalerProfile.keda.enable
 else
   az aks update -g "$RG" -n "$AKS" --enable-keda -o none
 fi
+
+echo "== [1b] Pin KEDA operator to the system pool =="
+# KEDA is an AKS-managed add-on (runs in kube-system). The add-on reconciler does NOT
+# revert these scheduling patches (verified), so they persist across reconciles.
+pin_to_system kube-system \
+  deploy/keda-operator deploy/keda-operator-metrics-apiserver deploy/keda-admission-webhooks
 
 echo "== [2/4] Verify KEDA operator pods + CRDs =="
 kubectl get pods -n kube-system | grep -i keda || { echo "FAIL: no keda pods"; exit 1; }

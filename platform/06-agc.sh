@@ -14,6 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source ./env.sh
+source ./platform/lib/pin.sh
 
 echo "### 1. ALB Controller managed identity + federation + roles ..."
 az identity create -g "$RG" -n alb-identity -o none 2>/dev/null || true
@@ -73,6 +74,9 @@ helm upgrade --install alb-controller "$ALB_CHART" \
   --set albController.namespace=azure-alb-system \
   --set albController.podIdentity.clientID="$ALB_MI_CLIENT" \
   --wait --timeout 5m
+
+echo "### 3b. Pin the ALB controller to the system pool"
+pin_to_system azure-alb-system deploy/alb-controller
 
 echo "### 4. ApplicationLoadBalancer CR (templated subnet id) + Gateway ..."
 kubectl create namespace alb-infra --dry-run=client -o yaml | kubectl apply -f -

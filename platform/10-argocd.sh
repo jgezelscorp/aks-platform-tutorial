@@ -10,6 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source ./env.sh
+source ./platform/lib/pin.sh
 
 ARGO_URL="https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml"
 
@@ -21,6 +22,12 @@ if ! kubectl apply -n argocd -f "$ARGO_URL" >/tmp/argo-apply.log 2>&1; then
 else
   tail -3 /tmp/argo-apply.log
 fi
+
+echo "### 1b. Pin Argo CD to the system pool (keep GitOps control plane off the user pool)"
+pin_to_system argocd \
+  deploy/argocd-server deploy/argocd-repo-server deploy/argocd-redis \
+  deploy/argocd-dex-server deploy/argocd-applicationset-controller \
+  deploy/argocd-notifications-controller statefulset/argocd-application-controller
 
 echo "### 2. Wait for Argo CD core to be Available"
 for d in argocd-repo-server argocd-server argocd-applicationset-controller; do

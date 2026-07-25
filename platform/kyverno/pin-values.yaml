@@ -1,0 +1,25 @@
+# Pin all four Kyverno controllers to the SYSTEM node pool.
+# Applied via `helm upgrade --install ... -f platform/kyverno/pin-values.yaml`.
+# Using Helm values (rather than a post-install kubectl patch) means the pods come
+# up already pinned — which avoids a bootstrap deadlock where Kyverno's own admission
+# webhook (failurePolicy=Fail) would block a later patch while Kyverno is still Pending.
+#
+# nodeSelector kubernetes.azure.com/mode=system  -> only system-mode nodes
+# toleration   CriticalAddonsOnly                -> tolerate the system-pool taint
+_pin: &pin
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+
+admissionController:
+  <<: *pin
+backgroundController:
+  <<: *pin
+cleanupController:
+  <<: *pin
+reportsController:
+  <<: *pin

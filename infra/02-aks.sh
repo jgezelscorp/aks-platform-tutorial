@@ -31,7 +31,7 @@ else
     --vnet-subnet-id "$SYS_SUBNET_ID" \
     --nodepool-name systempool \
     --node-count "$SYS_NODE_COUNT" ${AKS_ZONES:+--zones $AKS_ZONES} \
-    --node-vm-size "$AKS_VM_SIZE" \
+    --node-vm-size "$SYS_VM_SIZE" \
     --enable-cluster-autoscaler \
     --min-count "$SYS_MIN" --max-count "$SYS_MAX" \
     --enable-aad --enable-azure-rbac \
@@ -54,7 +54,7 @@ else
   az aks nodepool add -g "$RG" --cluster-name "$AKS" \
     --name userpool --mode User \
     --node-count "$USER_NODE_COUNT" ${AKS_ZONES:+--zones $AKS_ZONES} \
-    --node-vm-size "$AKS_VM_SIZE" \
+    --node-vm-size "$USER_VM_SIZE" \
     --enable-cluster-autoscaler \
     --min-count "$USER_MIN" --max-count "$USER_MAX" \
     --labels workload=general -o none

@@ -8,7 +8,8 @@ the validation status. Where the deck and this errata disagree, **this errata is
 authoritative** — its commands were run and observed to work.
 
 - **Validation cluster:** `aks-aksplat-dev` in **North Europe**, Kubernetes 1.35.x
-- **Node SKU:** `Standard_D2s_v6` (POC sizing — see caveat E1)
+- **Node SKUs:** system pool `Standard_D4s_v6` (hosts the platform add-ons), user
+  pool `Standard_D2s_v6` (workloads only) — see caveat E1
 - **Companion repo:** curated, runnable tree in this folder (`infra/`, `apps/`,
   `.github/workflows/`, `env.sh`). The GitHub Actions pipeline is wired to a real
   repository and every workflow ran green.
@@ -19,11 +20,11 @@ authoritative** — its commands were run and observed to work.
 
 | # | Caveat | Detail |
 |---|--------|--------|
-| E1 | **POC SKUs / node counts** | Validation used `Standard_D2s_v6`, system pool min/max **1/3**, user pool min/max **1/3**. Production should size up. The user pool autoscaler is deliberately **min=1** so idle demo clusters do not park spare nodes (resource waste). |
+| E1 | **Node SKUs / counts (validated design)** | The **system** pool runs `Standard_D4s_v6`, autoscaler **min 2 / max 3**. Min 2 is **required**, not optional: the system pool hosts BOTH the AKS-managed add-ons AND the pinned platform control plane (Argo CD, Kyverno, KEDA, ALB controller), which does **not** fit on a single D4s_v6 node (~3.86 vCPU allocatable) — and a min-1 system pool will not reliably autoscale up under this nodeSelector setup. The **user** pool runs the frugal `Standard_D2s_v6`, autoscaler **min 1 / max 3**, so idle demo clusters do not park spare workload nodes (resource waste). Production should size up further and consider min 3 system for zone spread. |
 | E2 | **No availability zones in sandbox** | The validation subscription could not place zonal node pools, so zones were disabled (`--zones` omitted). Production clusters should span zones. |
 | E3 | **Region** | Everything validated in `northeurope`. If you change region, check that every dependent service (managed Prometheus, Grafana, AGC) is available there. |
 | E4 | **Pin the Kubernetes version** | The deck's `az aks create` omits `--kubernetes-version`, so you get whatever the region defaults to. Pin it (e.g. `--kubernetes-version 1.31.1`) for reproducibility. |
-| E5 | **Add-ons run on the system pool** | Platform add-ons (Cilium/ACNS, Kyverno, Argo CD, KEDA, CSI) belong on the **system** node pool; keep the user pool for workloads. Ensure the system pool has enough headroom (this is why system max = 3). |
+| E5 | **Add-ons are pinned to the system pool** | AKS-managed add-ons (Cilium/ACNS, CoreDNS, ama-metrics/logs, CSI) already run on the system pool or as DaemonSets. The user-installed platform control plane (Argo CD, Kyverno, KEDA, ALB controller) is **explicitly pinned** to the system pool so the user pool stays reserved for workloads. Pinning = `nodeSelector: kubernetes.azure.com/mode=system` + a `CriticalAddonsOnly` toleration on each workload's pod template. Helper: `platform/lib/pin.sh` (`pin_to_system <ns> <kind/name>…`); Kyverno pins via `platform/kyverno/pin-values.yaml` at Helm-install time to avoid a self-webhook bootstrap deadlock. Use the `mode=system` **label**, not `agentpool=<name>`, so the pin survives a pool SKU/name change. This co-location is why the system pool is sized D4s_v6 min 2 (see E1). |
 
 ---
 
@@ -176,6 +177,43 @@ git config user.name  "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 ```
 
+### Azure Backup for AKS — backup instance create (governed subscriptions)
+
+The AKS Backup deploy (`platform/16-backup.sh`) succeeds end-to-end, but on a
+**governed / policy-managed subscription** the `backup-instance create` step fails
+through a chain of four *layered* problems — each fix reveals the next. Capturing
+them here so you do not rediscover them one 403 at a time.
+
+**B19 — Storage account `publicNetworkAccess: Disabled` → 403 AuthorizationFailure.**
+Azure Policy on a governed subscription forces public network access **off** on the
+backup storage account, so the in-cluster data mover cannot reach
+`<sa>.blob.core.windows.net`. RBAC is *not* the problem (the extension MSI already
+has Storage Blob Data Contributor). Fix — add a **blob private endpoint** for the
+storage account into the cluster's VNet (the script mirrors the proven Key Vault PE
+pattern in `05b-kv-private-endpoint.sh`): PE with `--group-id blob`, private DNS zone
+`privatelink.blob.core.windows.net`, VNet link, and a DNS zone group.
+
+**B20 — Private DNS A record never registers → "no such host".**
+The DNS zone group must be created with the zone's full **resource ID**, not its
+name. If `SUB_ID` is empty when the script runs, the zone ID is malformed and the
+A record stays empty — pods then fail to resolve the blob endpoint. Fix — pin
+`SUB_ID` (see B22) so the zone ID resolves; verify with an in-cluster busybox
+`nslookup <sa>.blob.core.windows.net` returning the PE private IP.
+
+**B21 — Container create silently fails → 404 ContainerNotFound.**
+`az storage container create --auth-mode login` runs on the **data plane**; with
+public access disabled and the CLI not on the VNet, it silently no-ops (and a
+`2>/dev/null || echo "exists"` masks it). Fix — create the container on the
+**management plane**: `az storage container-rm create` (ARM, honours the private
+network path).
+
+**B22 — Default subscription drift.**
+On multi-subscription machines the default `az` context flips between subscriptions,
+so scripts target the wrong one. Fix — every script explicitly pins the context
+(`az account set --subscription "$SUB_ID"`), with the real ID living **only** in
+git-ignored `env.local.sh` (see `env.local.sh.example`), never hardcoded in a
+committed script.
+
 ---
 
 ## 3. OIDC federation caveats (Section 18 — critical, easy to miss)
@@ -237,6 +275,7 @@ Security tab works because the validation repo is **public** (free code scanning
 | 18 | GitHub CI/CD (OIDC) | ✅ **all 3 workflows green** |
 | 19 | Container Insights, Grafana, alerting | ✅ ingestion proven |
 | 20 | KEDA, ACNS/Hubble, Flux | ✅ executed |
+| — | Backup & restore (Azure Backup for AKS) | ✅ executed (on-demand job Completed, restore point created) |
 | 20 | Fleet capstone | ⚠️ reviewed (command shapes verified via `--help`; not run — needs multiple clusters) |
 | 16 | Cleanup / teardown | ⏸️ run **last**, on purpose |
 

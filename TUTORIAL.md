@@ -53,7 +53,8 @@ Every command assumes you have run `source ./env.sh` first (see Section 0), whic
 - [🌊 **15. Flux GitOps**](#15-flux-gitops)
 - [📊 **16. Container Insights and logs**](#16-container-insights-and-logs)
 - [🚀 **17. CI/CD with GitHub Actions and OIDC**](#17-cicd-with-github-actions-and-oidc)
-- [🧹 **18. Cleanup — tear it all down**](#18-cleanup--tear-it-all-down)
+- [💾 **18. Backup & Restore with Azure Backup for AKS**](#18-backup--restore-with-azure-backup-for-aks)
+- [🧹 **19. Cleanup — tear it all down**](#19-cleanup--tear-it-all-down)
 - [**Where to go next**](#where-to-go-next)
 
 
@@ -1272,7 +1273,103 @@ How it works: `HTTPRoute` maps a hostname and path to a Service. `Programmed=Tru
 
 ### Hands-on examples
 
+The examples below go from *inspecting* the gateway to *reaching* your app, then on to more advanced routing. Start at the top if you are new to the Gateway API.
+
+#### See the gateway and its public address
+
+The `Gateway` is the shared front door. This is how you find it and, crucially, the public address AGC gave it.
+
+```bash
+source ./env.sh
+# List every Gateway in the cluster (which namespace, which class, is it Programmed?)
+kubectl get gateway -A
+
+# Look at ours in detail
+kubectl get gateway gw-platform -n demo -o wide
+kubectl describe gateway gw-platform -n demo
+
+# The one value you care about: the public entry point AGC assigned
+kubectl get gateway gw-platform -n demo \
+  -o jsonpath='{.status.addresses[0].value}{"\n"}'
+```
+
+How it works: `describe` shows the listeners (here HTTPS on 443) and a `Programmed=True` condition once AGC has accepted the config. The value under `.status.addresses` is an **AGC frontend FQDN** (something like `xxxxx.fzyy.alb.azure.com`) — that is the real, internet-facing address your app lives behind. Everything else in this section is about steering traffic from that address to the right pods.
+
+#### List the routes attached to the gateway
+
+A `Gateway` on its own serves nothing — traffic only flows when an `HTTPRoute` attaches to it. This shows which routes exist and whether they actually bound to the gateway.
+
+```bash
+source ./env.sh
+# All routes, all namespaces, with the hostnames they answer for
+kubectl get httproute -A
+kubectl get httproute demo-route -n demo -o wide
+
+# Did it attach to the gateway and get programmed?
+kubectl -n demo get httproute demo-route \
+  -o jsonpath='{range .status.parents[*]}parent={.parentRef.name} accepted={.conditions[?(@.type=="Accepted")].status} programmed={.conditions[?(@.type=="Programmed")].status}{"\n"}{end}'
+
+# Full detail, including any binding errors
+kubectl describe httproute demo-route -n demo
+```
+
+How it works: each route names a `parentRef` (the gateway it wants to join). The `Accepted` condition means the gateway allowed the attachment; `Programmed=True` means AGC pushed the rule live. If a route serves no traffic, this is the first place to look — usually `Accepted=False` (the gateway's `allowedRoutes` rejected it) or a bad `backendRef`.
+
+#### Reach your app behind the gateway
+
+This ties it all together: how a request travels from the public address to your pods, and how to test it before you own any DNS.
+
+The request path is a chain — follow it top to bottom:
+
+```
+client ──▶ AGC frontend FQDN (.status.addresses)
+        ──▶ Gateway listener (HTTPS :443, serves the demo-tls cert)
+        ──▶ HTTPRoute match (hostname app.contoso.com + path /)
+        ──▶ backendRef Service demo-svc:80
+        ──▶ Endpoints (the demo pods)
+```
+
+```bash
+source ./env.sh
+FQDN=$(kubectl get gateway gw-platform -n demo -o jsonpath='{.status.addresses[0].value}')
+echo "Public entry point : https://$FQDN"
+
+# What hostname must the request carry to match the route?
+kubectl -n demo get httproute demo-route -o jsonpath='{.spec.hostnames[0]}{"\n"}'
+
+# What backs the route, and is anything actually running behind it?
+kubectl -n demo get svc demo-svc -o wide
+kubectl -n demo get endpoints demo-svc
+
+# Reach it. -k trusts the self-signed cert; -H "Host: ..." stands in for DNS.
+curl -ksS -o /dev/null -w "HTTP %{http_code}\n" \
+  -H "Host: app.contoso.com" "https://$FQDN/"
+```
+
+How it works: the route only matches when the request's `Host` equals `app.contoso.com`, so you send that as a header (`-H "Host: ..."`) even though you are dialing the raw FQDN. A `HTTP 200` proves the whole chain works. If `kubectl get endpoints demo-svc` is empty, the route is fine but no pods back it — deploy the demo app (Section 8) first.
+
+#### Point real DNS at the gateway
+
+In production you do not curl with a `Host` header — you give users a real name. You do that by pointing your hostname at the gateway's FQDN with a CNAME.
+
+```bash
+source ./env.sh
+FQDN=$(kubectl get gateway gw-platform -n demo -o jsonpath='{.status.addresses[0].value}')
+
+# If you manage the DNS zone in Azure DNS:
+az network dns record-set cname set-record \
+  -g <your-dns-rg> -z contoso.com -n app -c "$FQDN" -o none
+
+# Now the app resolves on its own name — no Host header, and with a real
+# (non-self-signed) cert you can drop -k too:
+curl -sS -o /dev/null -w "HTTP %{http_code}\n" "https://app.contoso.com/"
+```
+
+How it works: a `CNAME` from `app.contoso.com` to the AGC FQDN lets public DNS resolve your hostname to the gateway. Because the `Host` now genuinely *is* `app.contoso.com`, the same `HTTPRoute` matches with no header trickery. Pair this with a CA-issued certificate (or `cert-manager`) instead of the validation-only self-signed one.
+
 #### Add path-based routing
+
+One hostname can fan out to several services by URL path — the classic "web app plus API" split.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -1293,27 +1390,11 @@ spec:
       port: 80
 ```
 
-Requests under `/api` go to `demo-api-svc`; the existing `/` route can continue serving the web app.
-
-#### Test without DNS
-
-```bash
-VIP=$(kubectl get gateway gw-platform -n demo -o jsonpath='{.status.addresses[0].value}')
-curl -ksS -H "Host: ${APP_HOST:-app.contoso.com}" "https://$VIP/"
-```
-
-The `Host` header simulates DNS while you test.
-
-#### Troubleshoot route programming
-
-```bash
-kubectl -n demo describe httproute demo-route
-kubectl -n azure-alb-system logs deploy/alb-controller --tail=100
-```
-
-Look for invalid backend references, missing node-RG roles, or subnet delegation problems.
+Requests under `/api` go to `demo-api-svc`; the existing `/` route keeps serving the web app. Verify it the same way as before: `curl -ksS -H "Host: app.contoso.com" "https://$FQDN/api"`.
 
 #### Add another hostname
+
+A shared gateway can serve many hostnames — add a route with a different `hostnames` value and it is live on the same public address.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -1332,7 +1413,19 @@ spec:
       port: 80
 ```
 
-A shared Gateway can host multiple route objects and hostnames.
+Both `app.contoso.com` and `demo.contoso.com` now resolve through the one gateway; each just needs its own DNS record pointing at the same FQDN.
+
+#### Troubleshoot route programming
+
+When a route will not go live, these two commands explain almost every case.
+
+```bash
+source ./env.sh
+kubectl -n demo describe httproute demo-route
+kubectl -n azure-alb-system logs deploy/alb-controller --tail=100
+```
+
+Look for `Accepted=False` (the gateway's `allowedRoutes` rejected the route), an invalid `backendRef` (wrong Service name or port), missing node-resource-group roles on the ALB identity, or a subnet-delegation problem. The controller logs name the exact resource that failed.
 
 ## 8. Deploy the demo app with Kustomize
 
@@ -1426,6 +1519,20 @@ How it works: listing the mount path confirms CSI mounted files without exposing
 
 ### Hands-on examples
 
+#### See what Kustomize will apply
+
+Before changing anything, render the manifests Kustomize builds from the base plus overlays. Nothing is applied — you just *see* the result.
+
+```bash
+source ./env.sh
+# Render the final YAML Kustomize produces for the demo app
+kubectl kustomize apps/demo | head -40
+
+# Preview the difference between what is live and what the overlay wants
+kubectl diff -k apps/demo || true
+```
+
+`kubectl kustomize` prints the combined result; `kubectl diff -k` shows exactly what an apply would change. This is the safest way to understand an overlay before you touch the cluster.
 #### Create a dev overlay
 
 ```bash
@@ -2160,6 +2267,20 @@ How it works: the observability wiring links your Managed Grafana instance to th
 
 ### Hands-on examples
 
+#### Open Grafana and find a dashboard
+
+The fastest way to see metrics is the Grafana UI — no PromQL required to start.
+
+```bash
+source ./env.sh
+# Print the Grafana URL, then open it in a browser and sign in with your Azure account
+az grafana show -g "$RG" -n "$GRAFANA" --query 'properties.endpoint' -o tsv
+
+# See which dashboards are already provisioned
+az grafana dashboard list -n "$GRAFANA" -o table 2>/dev/null | head -20
+```
+
+In the UI, open **Dashboards -> Kubernetes / Compute Resources / Namespace (Workloads)** and pick the `demo` namespace. You will see CPU and memory graphs for the app with no query writing at all — the PromQL examples below are for when you want to build your own.
 #### Run a basic PromQL query
 
 ```promql
@@ -2306,6 +2427,38 @@ How it works: KEDA is not replacing Kubernetes HPA; it creates an HPA for you an
 
 ### Hands-on examples
 
+#### See the scaler and watch it scale
+
+Start here: look at the ScaledObject, the HPA KEDA created from it, then force a scale event so you can watch replicas change live.
+
+```bash
+source ./env.sh
+# The scaling rule you defined, and the HPA KEDA generated and owns
+kubectl get scaledobject,hpa -n demo
+kubectl describe scaledobject demo-scaler -n demo | sed -n '1,30p'
+```
+
+Force a scale event now instead of waiting for the cron window, then watch it:
+
+```bash
+# Set the cron window to start this minute (scales within ~1 min)
+S=$(date -u +%M | sed 's/^0//'); [ -z "$S" ] && S=0
+E=$(( (S + 8) % 60 ))
+kubectl -n demo patch scaledobject demo-scaler --type=merge \
+  -p "{\"spec\":{\"triggers\":[{\"type\":\"cron\",\"metadata\":{\"timezone\":\"UTC\",\"start\":\"$S * * * *\",\"end\":\"$E * * * *\",\"desiredReplicas\":\"3\"}}]}}"
+
+# Watch REPLICAS climb 1 -> 3 (Ctrl+C when it reaches 3)
+kubectl -n demo get hpa keda-hpa-demo-scaler -w
+```
+
+Reset to the standard 10-minute schedule afterwards:
+
+```bash
+kubectl -n demo patch scaledobject demo-scaler --type=merge \
+  -p '{"spec":{"triggers":[{"type":"cron","metadata":{"timezone":"UTC","start":"0,10,20,30,40,50 * * * *","end":"5,15,25,35,45,55 * * * *","desiredReplicas":"3"}}]}}'
+```
+
+The `HPA` column moving from `1` to `3` proves the trigger fired and KEDA scaled the Deployment. This inspect-then-watch pattern works for every trigger type below.
 #### Cron ScaledObject
 
 Use a cron trigger when you know traffic will rise at a predictable time, such as office hours or batch windows.
@@ -3079,7 +3232,252 @@ The git identity is required; without `user.name` and `user.email`, the runner r
 
 ---
 
-## 18. Cleanup — tear it all down
+## 18. Backup & Restore with Azure Backup for AKS
+
+**What & why**  
+Azure Backup for AKS snapshots your Kubernetes workloads — namespaced objects (Deployments, Services, ConfigMaps, Secrets) and, optionally, the data on persistent volumes via CSI snapshots — into a **Backup vault** so you can recover after an accidental `kubectl delete`, a bad rollout, or the loss of a whole namespace. It is a managed, policy-driven service: you define a schedule and retention once, and Azure runs the backups and prunes old restore points for you.
+
+There are a few moving parts, and it helps to know what each one does before you run the commands:
+
+- **Backup vault** — the Azure resource that stores restore points and enforces retention. Separate from a Recovery Services vault.
+- **Backup storage account + blob container** — the in-cluster data mover writes the actual backup blobs here.
+- **AKS Backup extension** — a cluster extension (`microsoft.dataprotection.kubernetes`) that runs the data mover pods inside `kube-system`. It gets its own managed identity.
+- **Trusted Access** — a role binding that lets the Backup vault operate on the cluster's API without you handing out kubeconfig credentials.
+- **Backup policy** — the schedule (the default template is hourly with a daily full) and retention (7 days).
+- **Backup instance** — the actual protected item: "namespace `demo` on this cluster, using this policy."
+
+> [!IMPORTANT]
+> **Governed-subscription wrinkle.** On subscriptions governed by security baselines (for example the NIST or CIS initiatives), a policy **force-disables public network access** on new storage accounts. With no public data-plane path, the in-cluster data mover cannot reach the backup blob container and the backup instance fails with `UserErrorGenericNetworkMisconfiguration` (a 403). The production-correct fix — and the one this tutorial uses — is to wire a **blob private endpoint** into the AKS VNet, exactly like the Key Vault private endpoint in Section 6. Two related gotchas fall out of this: (1) create the blob container over the **management plane** (`az storage container-rm create`), because a data-plane create from a machine that is not on the VNet silently fails; and (2) when you create the private-endpoint DNS zone group, pass the private DNS zone's **resource ID**, or no A record is registered and the cluster resolves `NXDOMAIN`.
+
+The whole flow is automated and idempotent in **`platform/16-backup.sh`** — you can run that script end to end. The steps below walk through what it does so you understand each stage.
+
+### Steps
+
+1. Create the backup storage account and its blob container.
+
+```bash
+source ./env.sh
+
+# Storage account for the backup blobs (LRS is fine for a demo).
+az storage account create -g "$RG" -n "$BKUP_SA" -l "$LOCATION" \
+  --sku Standard_LRS --min-tls-version TLS1_2 --allow-blob-public-access false -o none
+
+# IMPORTANT: create the container over the MANAGEMENT plane (container-rm), not the
+# data plane (container create). On governed subs the SA has public access disabled,
+# so a data-plane create from off-VNet fails silently.
+az storage container-rm create --storage-account "$BKUP_SA" -g "$RG" -n "$BKUP_CONTAINER" -o none
+```
+
+**How it works** — The data mover reads and writes backup blobs in `$BKUP_CONTAINER`. `container-rm` goes through Azure Resource Manager, so it works regardless of the storage firewall, whereas the data-plane `az storage container create` needs a network path to the blob endpoint that a governed SA does not expose publicly.
+
+2. Give the cluster a private path to the storage account (blob private endpoint + private DNS).
+
+```bash
+source ./env.sh
+
+SA_ID=$(az storage account show -g "$RG" -n "$BKUP_SA" --query id -o tsv)
+
+# Private DNS zone for blob + link it to the AKS VNet.
+az network private-dns zone create -g "$RG" -n privatelink.blob.core.windows.net -o none
+az network private-dns link vnet create -g "$RG" -z privatelink.blob.core.windows.net \
+  -n "link-$VNET" --virtual-network "$VNET" --registration-enabled false -o none
+
+# Private endpoint into the shared PE subnet (snet-pe, created in Section 6).
+az network private-endpoint create -g "$RG" -n "pe-$BKUP_SA" -l "$LOCATION" \
+  --vnet-name "$VNET" --subnet snet-pe \
+  --private-connection-resource-id "$SA_ID" \
+  --group-id blob --connection-name "conn-$BKUP_SA" -o none
+
+# DNS zone group — pass the zone RESOURCE ID (not the name) so the A record registers.
+ZONE_ID="/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+az network private-endpoint dns-zone-group create -g "$RG" \
+  --endpoint-name "pe-$BKUP_SA" -n zg \
+  --private-dns-zone "$ZONE_ID" --zone-name blob -o none
+```
+
+**How it works** — The private endpoint gives the storage account a private IP inside `snet-pe`. The private DNS zone `privatelink.blob.core.windows.net`, linked to the AKS VNet, makes the cluster resolve `$BKUP_SA.blob.core.windows.net` to that private IP instead of a public one. The zone group auto-registers the A record — but only if you pass the zone's resource ID.
+
+3. Create the Backup vault.
+
+```bash
+source ./env.sh
+
+az dataprotection backup-vault create -g "$RG" --vault-name "$BKUP_VAULT" -l "$LOCATION" \
+  --type SystemAssigned \
+  --storage-settings datastore-type="VaultStore" type="LocallyRedundant" -o none
+```
+
+**How it works** — The vault holds restore points and gets a **system-assigned managed identity** that later needs permissions on the cluster and snapshot resource group. `VaultStore` + `LocallyRedundant` keeps a single-region copy (cheapest tier).
+
+4. Install the AKS Backup extension and grant its identity access to the storage account.
+
+```bash
+source ./env.sh
+
+SA_ID=$(az storage account show -g "$RG" -n "$BKUP_SA" --query id -o tsv)
+
+az k8s-extension create --name "$BKUP_EXT" \
+  --extension-type microsoft.dataprotection.kubernetes \
+  --scope cluster --cluster-type managedClusters \
+  --cluster-name "$AKS" --resource-group "$RG" --release-train stable \
+  --configuration-settings \
+    blobContainer="$BKUP_CONTAINER" storageAccount="$BKUP_SA" \
+    storageAccountResourceGroup="$RG" storageAccountSubscriptionId="$SUB_ID" -o none
+
+# The extension gets its own managed identity — grant it data access to the SA.
+EXT_MSI=$(az k8s-extension show --name "$BKUP_EXT" --cluster-name "$AKS" \
+  --resource-group "$RG" --cluster-type managedClusters \
+  --query aksAssignedIdentity.principalId -o tsv)
+
+az role assignment create --assignee-object-id "$EXT_MSI" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Contributor" --scope "$SA_ID" -o none
+```
+
+**How it works** — The extension runs the data mover pods in the cluster. It authenticates to the storage account with its own managed identity, so that identity needs **Storage Blob Data Contributor** on the SA to write backup blobs.
+
+5. Wire Trusted Access, then create the backup policy.
+
+```bash
+source ./env.sh
+
+VAULT_ID=$(az dataprotection backup-vault show -g "$RG" --vault-name "$BKUP_VAULT" --query id -o tsv)
+
+# Trusted Access lets the vault operate on the cluster without kubeconfig creds.
+az aks trustedaccess rolebinding create -g "$RG" --cluster-name "$AKS" \
+  -n aksbackup-tab --source-resource-id "$VAULT_ID" \
+  --roles "Microsoft.DataProtection/backupVaults/backup-operator" -o none
+
+# Backup policy from the built-in default template (hourly schedule, 7-day retention).
+az dataprotection backup-policy get-default-policy-template \
+  --datasource-type AzureKubernetesService > policy.json
+az dataprotection backup-policy create -g "$RG" --vault-name "$BKUP_VAULT" \
+  -n "$BKUP_POLICY" --policy "$(cat policy.json)" -o none
+```
+
+**How it works** — Trusted Access binds the vault's `backup-operator` role to the cluster so the managed backup flow can snapshot resources. The policy defines *when* and *how long*: the default template runs a backup on a schedule and keeps restore points for 7 days.
+
+6. Configure and create the backup instance for the `demo` namespace.
+
+```bash
+source ./env.sh
+
+CLUSTER_ID=$(az aks show -g "$RG" -n "$AKS" --query id -o tsv)
+POLICY_ID=$(az dataprotection backup-policy show -g "$RG" --vault-name "$BKUP_VAULT" -n "$BKUP_POLICY" --query id -o tsv)
+
+# What to back up: the demo namespace, including PV snapshots and cluster-scoped refs.
+az dataprotection backup-instance initialize-backupconfig \
+  --datasource-type AzureKubernetesService \
+  --included-namespaces "$BKUP_NS" --snapshot-volumes true \
+  --include-cluster-scope-resources true > backupconfig.json
+
+az dataprotection backup-instance initialize \
+  --datasource-type AzureKubernetesService --datasource-location "$LOCATION" \
+  --datasource-id "$CLUSTER_ID" --policy-id "$POLICY_ID" \
+  --backup-configuration "$(cat backupconfig.json)" \
+  --friendly-name "$BKUP_INSTANCE" \
+  --snapshot-resource-group-name "$RG" > backupinstance.json
+
+# Grant the vault identity the roles it needs, then create the instance.
+az dataprotection backup-instance update-msi-permissions \
+  --datasource-type AzureKubernetesService --resource-group "$RG" \
+  --vault-name "$BKUP_VAULT" --backup-instance "$(cat backupinstance.json)" \
+  --operation Backup --permissions-scope ResourceGroup --yes -o none
+
+az dataprotection backup-instance create -g "$RG" --vault-name "$BKUP_VAULT" \
+  --backup-instance "$(cat backupinstance.json)" -o none
+```
+
+**How it works** — The backup *configuration* declares scope (namespace `$BKUP_NS`, volume snapshots on, cluster-scoped resources included). `update-msi-permissions` grants the vault's identity the cluster/snapshot/storage roles it needs. `create` then registers the protected item; it takes a couple of minutes to reach `ProtectionConfigured`.
+
+### Hands-on examples
+
+#### Show what is protected
+
+Start every backup demo by proving the pieces exist and the item is healthy.
+
+```bash
+source ./env.sh
+
+# The vault, the policy, and the protected item with its live protection state.
+az dataprotection backup-vault show -g "$RG" --vault-name "$BKUP_VAULT" \
+  --query "{name:name, state:properties.provisioningState}" -o table
+
+az dataprotection backup-instance list -g "$RG" --vault-name "$BKUP_VAULT" \
+  --query "[].{name:properties.friendlyName, state:properties.currentProtectionState}" -o table
+```
+
+A healthy item shows `ProtectionConfigured`. If you see `ConfiguringProtection`, wait a minute and re-run — the backend is still finishing setup.
+
+#### Trigger an on-demand backup and watch the job
+
+You do not have to wait for the schedule — force a backup now and follow the job to completion.
+
+```bash
+source ./env.sh
+
+BI=$(az dataprotection backup-instance list -g "$RG" --vault-name "$BKUP_VAULT" --query "[0].name" -o tsv)
+RULE=$(az dataprotection backup-policy show -g "$RG" --vault-name "$BKUP_VAULT" -n "$BKUP_POLICY" \
+  --query 'properties.policyRules[?backupParameters].name | [0]' -o tsv)
+
+az dataprotection backup-instance adhoc-backup --name "$BI" -g "$RG" --vault-name "$BKUP_VAULT" \
+  --rule-name "$RULE" --retention-tag-override Default -o none
+
+# Follow the most recent job until it reads "Completed".
+az dataprotection job list -g "$RG" --vault-name "$BKUP_VAULT" \
+  --query "[0].{op:properties.operationCategory, status:properties.status, start:properties.startTime}" -o table
+```
+
+**How it works** — `adhoc-backup` submits a one-off backup using the policy's backup rule; `--retention-tag-override Default` tags the restore point with the default retention. The job moves `InProgress → Completed` in a few minutes.
+
+#### List restore points
+
+Every completed backup produces a restore point you can recover from.
+
+```bash
+source ./env.sh
+
+BI=$(az dataprotection backup-instance list -g "$RG" --vault-name "$BKUP_VAULT" --query "[0].name" -o tsv)
+
+az dataprotection recovery-point list -g "$RG" --vault-name "$BKUP_VAULT" \
+  --backup-instance-name "$BI" \
+  --query "[].{name:name, time:properties.recoveryPointTime}" -o table
+```
+
+**How it works** — Each row is a point in time you can restore. The `name` (a GUID) is what you pass to a restore operation as `--recovery-point-id`.
+
+#### Prepare a namespace restore
+
+Restore is the payoff. This example shows how to build and validate a restore request — run the validation first so you catch problems before touching the cluster.
+
+```bash
+source ./env.sh
+
+BI=$(az dataprotection backup-instance list -g "$RG" --vault-name "$BKUP_VAULT" --query "[0].name" -o tsv)
+CLUSTER_ID=$(az aks show -g "$RG" -n "$AKS" --query id -o tsv)
+RP=$(az dataprotection recovery-point list -g "$RG" --vault-name "$BKUP_VAULT" \
+  --backup-instance-name "$BI" --query "[0].name" -o tsv)
+
+# Build a restore request: restore the demo namespace from the newest restore point.
+az dataprotection backup-instance restore initialize-for-item-recovery \
+  --datasource-type AzureKubernetesService \
+  --restore-location "$LOCATION" --source-datastore OperationalStore \
+  --recovery-point-id "$RP" \
+  --backup-instance-id "$(az dataprotection backup-instance show -g "$RG" --vault-name "$BKUP_VAULT" -n "$BI" --query id -o tsv)" \
+  --included-namespaces "$BKUP_NS" > restorerequest.json
+
+# Validate BEFORE running — this checks permissions, conflicts, and snapshot access.
+az dataprotection backup-instance validate-for-restore -g "$RG" --vault-name "$BKUP_VAULT" \
+  --name "$BI" --restore-request-object "$(cat restorerequest.json)" -o table
+
+# When validation passes, trigger the restore:
+# az dataprotection backup-instance restore trigger -g "$RG" --vault-name "$BKUP_VAULT" \
+#   --name "$BI" --restore-request-object "$(cat restorerequest.json)" -o none
+```
+
+**How it works** — `initialize-for-item-recovery` builds the restore request JSON (what to restore, from which point, into which namespace). `validate-for-restore` dry-runs it against the cluster so you catch RBAC or conflict issues first. Only after it passes do you uncomment and run `restore trigger`. To rehearse safely, restore into a *different* namespace with `--target-resource-group-name`/namespace mapping so you never overwrite live workloads.
+
+## 19. Cleanup — tear it all down
 
 **What & why**
 Everything you built lives inside a single resource group, so cleanup is a one‑liner. Do this **last**, and only when you are finished — deleting the resource group is irreversible and removes the cluster, Key Vault, monitoring workspaces, and networking in one shot. Running it stops all further cost.

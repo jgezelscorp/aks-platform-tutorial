@@ -12,6 +12,18 @@ export KV=kv-${PREFIX}-${ENV}    # 3-24 chars, globally unique
 export AMW=amw-${PREFIX}-${ENV}  # Azure Monitor workspace
 export GRAFANA=graf-${PREFIX}-${ENV}
 export LAW=law-${PREFIX}-${ENV}  # Log Analytics
+# ---- AKS Backup (Section 16) ----
+# Backup vault + a storage account/blob container that holds backup data & metadata.
+# BKUP_SA must be 3-24 lowercase alphanumerics and GLOBALLY unique — change the
+# suffix if the name is taken. Snapshots land in SNAP_RG (defaults to the app RG).
+export BKUP_VAULT=bvault-${PREFIX}-${ENV}
+export BKUP_SA=stbkup${PREFIX}${ENV}            # 3-24 lowercase alnum, globally unique
+export BKUP_CONTAINER=aksbackup
+export BKUP_POLICY=aksbackuppolicy
+export BKUP_EXT=azure-aks-backup               # cluster extension instance name
+export BKUP_INSTANCE=aksbackup-${PREFIX}-${ENV}
+export BKUP_NS="${BKUP_NS:-demo}"              # namespace scope to protect
+export SNAP_RG="${SNAP_RG:-$RG}"              # resource group for disk snapshots
 # Availability zones: prod-recommended is "1 2 3". Some sandbox/MCAP subs have NO
 # AZ support in a region (az aks create -> AvailabilityZoneNotSupported). For those,
 # run with SANDBOX_NO_ZONES=1 to deploy zone-less. See ERRATA.md.

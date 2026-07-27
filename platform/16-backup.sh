@@ -12,6 +12,25 @@ LOC="$(az aks show -g "$RG" -n "$AKS" --query location -o tsv)"
 CLUSTER_ID="$(az aks show -g "$RG" -n "$AKS" --query id -o tsv)"
 echo "Cluster: $AKS  region: $LOC  namespace scope: $BKUP_NS"
 
+echo "== [0/10] Prerequisites: CLI extensions + resource providers =="
+# Azure Backup for AKS is not enabled by default. The commands below live in two CLI
+# add-on extensions, and two resource providers must be REGISTERED in this subscription
+# before any backup resource can be created. Both are commonly NotRegistered on a fresh
+# or governed subscription. This step is idempotent and one-time per subscription.
+az extension add --upgrade --name dataprotection -o none 2>/dev/null || true
+az extension add --upgrade --name k8s-extension  -o none 2>/dev/null || true
+for ns in Microsoft.DataProtection Microsoft.KubernetesConfiguration; do
+  state="$(az provider show --namespace "$ns" --query registrationState -o tsv 2>/dev/null || echo Unknown)"
+  if [ "$state" != "Registered" ]; then
+    echo "  registering $ns (asynchronous, 1-5 min)..."
+    az provider register --namespace "$ns" -o none
+    until [ "$(az provider show --namespace "$ns" --query registrationState -o tsv)" = "Registered" ]; do
+      echo "    waiting for $ns..."; sleep 20
+    done
+  fi
+  echo "  $ns: Registered"
+done
+
 echo "== [1/10] Storage account + blob container for backups =="
 az storage account create -g "$RG" -n "$BKUP_SA" -l "$LOC" \
   --sku Standard_LRS --min-tls-version TLS1_2 --allow-blob-public-access false -o none \

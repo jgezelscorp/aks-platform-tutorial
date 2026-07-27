@@ -214,6 +214,19 @@ so scripts target the wrong one. Fix — every script explicitly pins the contex
 git-ignored `env.local.sh` (see `env.local.sh.example`), never hardcoded in a
 committed script.
 
+**B23 — Backup prerequisites missing → "not registered" / "not recognized" errors.**
+Azure Backup for AKS is not on by default. Two Azure CLI extensions
+(`dataprotection`, `k8s-extension`) must be installed, and two resource providers
+(`Microsoft.DataProtection`, `Microsoft.KubernetesConfiguration`) must be
+**registered in the target subscription** — both are commonly `NotRegistered` on a
+fresh or governed subscription. Fix — `platform/16-backup.sh` now performs this in
+step `[0/10]`: `az extension add --upgrade` for both extensions and
+`az provider register` + a poll-until-`Registered` loop for both providers.
+Provider registration is asynchronous (1–5 min) and is a one-time action per
+subscription. Symptoms if skipped: *"'dataprotection' is misspelled or not
+recognized"* and *"The subscription is not registered to use namespace
+'Microsoft.DataProtection'."*
+
 ---
 
 ## 3. OIDC federation caveats (Section 18 — critical, easy to miss)

@@ -3246,6 +3246,80 @@ There are a few moving parts, and it helps to know what each one does before you
 - **Backup policy** — the schedule (the default template is hourly with a daily full) and retention (7 days).
 - **Backup instance** — the actual protected item: "namespace `demo` on this cluster, using this policy."
 
+### Before you start — prerequisites (one-time per subscription)
+
+Azure Backup for AKS is **not enabled by default**. Before any command in this section
+will succeed, four things must be in place. You do this **once per Azure subscription** —
+if you already have them from a previous run, you can skip straight to the steps.
+
+**1. Two Azure CLI extensions.** The backup commands are not part of the core Azure CLI;
+they ship as separate add-on modules. Install (or update) both:
+
+```bash
+# 'dataprotection' adds the `az dataprotection ...` commands (vault, policy, instance).
+# 'k8s-extension' adds the `az k8s-extension ...` commands (the in-cluster backup agent).
+az extension add --upgrade --name dataprotection
+az extension add --upgrade --name k8s-extension
+```
+
+`--upgrade` makes this safe to re-run: it installs the extension if it is missing and
+updates it if it is already there. If you skip this, the very first `az dataprotection`
+line fails with *"'dataprotection' is misspelled or not recognized"*.
+
+**2. Two resource providers registered.** A *resource provider* is the Azure service that
+knows how to create a particular kind of resource. Azure will not let you create a
+resource until its provider is **registered** in your subscription. Backup needs two
+providers that are frequently `NotRegistered` on a fresh or governed subscription:
+
+```bash
+source ./env.sh   # loads names AND pins the target subscription (via env.local.sh)
+
+# Start registration. These return immediately; Azure registers in the background.
+az provider register --namespace Microsoft.DataProtection
+az provider register --namespace Microsoft.KubernetesConfiguration
+
+# Wait until BOTH report "Registered" before continuing (usually 1–5 minutes).
+for ns in Microsoft.DataProtection Microsoft.KubernetesConfiguration; do
+  until [ "$(az provider show --namespace "$ns" --query registrationState -o tsv)" = "Registered" ]; do
+    echo "  waiting for $ns to register..."; sleep 20
+  done
+done
+echo "providers registered"
+```
+
+`Microsoft.DataProtection` is what backs the Backup vault, policy and instance;
+`Microsoft.KubernetesConfiguration` is what backs the in-cluster extension. (Backup also
+uses `Microsoft.Storage` and `Microsoft.ContainerService`, but those were already
+registered when you created the cluster in the earlier sections.) Skipping this step
+produces errors like *"The subscription is not registered to use namespace
+'Microsoft.DataProtection'."*
+
+**3. The platform from the earlier sections.** Backup protects an **existing** cluster, so
+the AKS cluster (`$AKS`), its virtual network (`$VNET`), and the shared private-endpoint
+subnet (`snet-pe`, created in Section 6) must already exist. If you followed the tutorial
+in order, they do — nothing extra to create here.
+
+**4. The names you will use.** Every command below reads its names from `env.sh` (that is
+what `source ./env.sh` does). You do not have to invent anything; the backup-specific
+variables are already defined for you:
+
+| Variable | What it is | Example value |
+|---|---|---|
+| `BKUP_VAULT` | Backup vault name | `bvault-aksplat-dev` |
+| `BKUP_SA` | Storage account that holds the backup blobs (globally unique, lowercase, no dashes) | `stbkupaksplatdev` |
+| `BKUP_CONTAINER` | Blob container inside that storage account | `aksbackup` |
+| `BKUP_POLICY` | Backup policy name (schedule + retention) | `aksbackuppolicy` |
+| `BKUP_EXT` | Name of the in-cluster extension instance | `azure-aks-backup` |
+| `BKUP_INSTANCE` | Friendly name of the protected item | `aksbackup-aksplat-dev` |
+| `BKUP_NS` | Kubernetes namespace to protect | `demo` |
+| `SNAP_RG` | Resource group where disk (volume) snapshots are stored | same as `$RG` |
+
+> [!NOTE]
+> **Backing up persistent volumes.** Later you will pass `--snapshot-volumes true` to also
+> back up the data on persistent volumes. That relies on the **Azure Disk CSI driver**,
+> which is enabled on every default AKS cluster — so there is nothing extra to install to
+> get volume backups working on managed disks.
+
 > [!IMPORTANT]
 > **Governed-subscription wrinkle.** On subscriptions governed by security baselines (for example the NIST or CIS initiatives), a policy **force-disables public network access** on new storage accounts. With no public data-plane path, the in-cluster data mover cannot reach the backup blob container and the backup instance fails with `UserErrorGenericNetworkMisconfiguration` (a 403). The production-correct fix — and the one this tutorial uses — is to wire a **blob private endpoint** into the AKS VNet, exactly like the Key Vault private endpoint in Section 6. Two related gotchas fall out of this: (1) create the blob container over the **management plane** (`az storage container-rm create`), because a data-plane create from a machine that is not on the VNet silently fails; and (2) when you create the private-endpoint DNS zone group, pass the private DNS zone's **resource ID**, or no A record is registered and the cluster resolves `NXDOMAIN`.
 

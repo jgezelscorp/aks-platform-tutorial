@@ -16,6 +16,33 @@ This is a **read-and-run script**. Every block is copy-paste. For each feature y
 
 ---
 
+## Which terminal do I use?
+
+**Every command in this playbook is `bash`, not PowerShell.** You can tell because
+each block starts with `source ./env.sh` and uses `$VAR`, `$(...)`, and loops — that
+is bash syntax. **PowerShell does not understand `source`** (and expands variables
+differently), so the commands will fail there. Use a **bash** shell:
+
+| Option | Why | Start it |
+|---|---|---|
+| **WSL (Ubuntu)** — recommended | Native bash + `az`/`kubectl`/`helm`; sees this repo at `/mnt/c/...` | `wsl` → `cd /mnt/c/temp/MLOZ-AKS` |
+| **Git Bash** | Ships with Git for Windows; understands `source`/`$VAR` | open **Git Bash** → `cd /c/temp/MLOZ-AKS` |
+| **Azure Cloud Shell (Bash)** | Zero install, tools pre-loaded | portal → Cloud Shell → **Bash** (upload `env.local.sh` + YAML first) |
+
+**One-time check** in your bash shell — make sure the tools are there:
+
+```bash
+az version && kubectl version --client && helm version
+# If 'az' is missing on WSL Ubuntu:
+#   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```
+
+> [!NOTE]
+> The scripts in this repo use **LF** line endings (correct for bash). WSL and Git Bash
+> handle them natively. Do **not** run these `.sh` files through PowerShell.
+
+---
+
 ## Table of contents
 
 - [Module 0 — Pre-flight & connect](#module-0--pre-flight--connect)

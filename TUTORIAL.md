@@ -32,6 +32,31 @@ Throughout the guide you will see GitHub-style callouts:
 
 Every command assumes you have run `source ./env.sh` first (see Section 0), which loads every name and ID into your shell.
 
+## Which terminal do I use?
+
+**Every command in this guide is `bash`, not PowerShell.** The commands start with
+`source ./env.sh` and use `$VAR`, `$(...)`, and shell loops — that is bash syntax.
+**PowerShell does not understand `source`** and handles variables differently, so the
+commands will not run there. Use a **bash** shell:
+
+| Option | Why | Start it |
+|---|---|---|
+| **WSL (Ubuntu)** — recommended | Native bash + `az`/`kubectl`/`helm`; sees this repo at `/mnt/c/...` | `wsl` → `cd /mnt/c/temp/MLOZ-AKS` |
+| **Git Bash** | Ships with Git for Windows; understands `source`/`$VAR` | open **Git Bash** → `cd /c/temp/MLOZ-AKS` |
+| **Azure Cloud Shell (Bash)** | Zero install, tools pre-loaded | portal → Cloud Shell → **Bash** (upload `env.local.sh` + YAML first) |
+
+Confirm the tools exist once, in your bash shell:
+
+```bash
+az version && kubectl version --client && helm version
+# If 'az' is missing on WSL Ubuntu:
+#   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```
+
+> [!NOTE]
+> The `.sh` scripts in this repo use **LF** line endings (required for bash). WSL and
+> Git Bash handle them natively — do **not** run them through PowerShell.
+
 ## Table of contents
 
 - [**Introduction — what you will build**](#introduction--what-you-will-build)
